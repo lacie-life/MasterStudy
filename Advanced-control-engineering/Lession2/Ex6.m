@@ -1,5 +1,5 @@
-numg=20*[1 5]; 
-deng=poly ([0 -1 -4]);
+numg=100*[1 10]; 
+deng=poly ([0 -3 -12]);
 
 G=tf (numg, deng)
 
