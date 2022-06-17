@@ -1,0 +1,211 @@
+\section{Access paths}
+Access paths can be seen as a general concept for indexes on relations: the DBMS needs several data structures, mainly for space management and retrieval.
+
+A common problem in database implementation consists in where to store incoming data, especially since not all tuples have the same size. A traditional solution for that is the free space bitmap, in which each nibble (an array of half a byte per page) indicates the fill status for each page.
+
+This means that information on space utilization has to be encoded in 4 bits, approximating the status with the linear formula $data\ size / \frac{page\ size}{2^{bits}}$, which however leads to accuracy loss.
+
+Logarithmic scale is often better ($\lceil log_2(free\ size)\rceil$), or interpolation, or a combination of methods since it is unlikely that each page only has a couple of tuples.
+
+When inserting the data, the required FSI entry is computed and FSI gets scanned for a match, then data is inserted. Searching leads to linear runtime, which can be too expensive, especially since the size is so small. This method therefore gets slower and slower, as FSI gets longer. 
+
+\subsection{Allocation}
+Performing allocation benefits from application knowledge: larger pieces are often inserted with short amount of time in between, or there can be one single huge item.
+
+Allocation should be contiguous, and to achieve this the interface $allocate(min, max)$ contains size parameters to improve layout, help deciding location and reduce fragmentation. Tuples are more difficult to store, and can cause over-allocation. Unfortunately, most programming languages do not support such options. 
+
+Taking a vector and continuously increasing its size, for example, will at some point lead to some misalignment if memory hasn't been allocated before: in this case, pointers can be employed to know next location, but MALLOC cannot give bounds on the overhead. 
+
+\subsection{Slotted Pages}
+Slotted pages are useful to allocate pages a fixed size on a segment, using slots supporting combinations of page number and slot number to retrieve information. 
+
+It can happen that a record overflows: in that case, it is moved to a new page, and a pointer gets stored in the previous slot. This forward mechanism enables to keep a structured storage while not having to perform cascading updates.
+
+When a record which has already been moved overflows again, in fact, there is no need to create a chain: the existing link can just be replaced, only forming a chain in case of an index. This system, however, relies on the hope that most tuples will not be moved, instead they will be never updated. 
+
+Slotted pages are implemented by storing tuples in a page in which data grows from one side and slots from the other. Each page will have a header and a new slot getting added as new data items get added, until it is full when two sides meet.
+
+In reality, data items have variable size, and it is unknown how many slots will be there. Updates and deletions can be complicated as well, since they might change the size: in this case, some data needs to be moved with periodic compactification to optimize space consumption.
+
+Header parameters are:
+\begin{itemize}
+	\item LSN, flag to check whether there have been crashes;
+	\item slotCount, number of used slots;
+	\item firstFreeSlot, pointer to the first usable slot;
+	\item dataStart, lower end of data, which should not be updated;
+	\item freeSpace, available space after compactification, which can be performed when this number is bigger than the effective free space.
+\end{itemize}
+The effective free space can be calculated with the following formula:
+$$EFS = pageSize - headerSize - slots \cdot slotSize - (pageSize - dataStart)$$ 
+
+Scanning slots to find a free one can take quadratic runtime, therefore pointers to free slots are employed; however, performance of slotted pages is still not ideal.
+
+Conceptually, each slot can be assigned an offset and length of the respective data item, even if empty tuples must be distinguished from deleted one through offset length.
+
+The main issue with this method is the lack of available space in the case a transaction to shrink a page aborts and the following to add data commits, making it necessary to store a further bit (flag) in the TID which would be stored inside the slot: if the TID is valid, the entry is redirected.
+
+\subsection{Record layout}
+A record layout has the purpose of materialize and serialize the tuples, trying to avoid the linear worst-case runtime of accessing an attribute. 
+
+Instead of offset, the length is stored:
+\begin{enumerate}
+	\item Each tuple is split in two parts;
+	\item The header has fixed size, while tail is variable;
+	\item Header contains pointers to the tail (beginning can just be computed);
+	\item Attributes are accessed in constant time.
+\end{enumerate}
+For even better performance, attributes can be reordered by decreasing alignment, i. e. the number of bits of its type. Sorting works since alignment is always a power of two, and it helps identifying the data type. 
+
+Variable length-data, which modern processors easily handle, is placed at the end and given alignment 1 by default, without wasting space on padding.
+
+NULL values can either be stored as invalid or identified with an additional bit, which allows to omit actual information to save more space. This is useful when NULL values are common.
+
+\subsection{Compression}
+Some DBMS store data in a compressed way, with the aim of saving space and most importantly improve performance: reducing size reduces bandwidth consumption as well, decreasing I/O costs.
+
+General compression schemes work better as the data gets larger (for instance LZ77), but every DBMS should be able to update information without decompressing and recompressing everything. Page size is also a problem, since it can vary.
+
+Compressing large chunks is therefore not an option, so it is performed tuple by tuple. Huffman encodings are a possibility (building decision trees to take advantage of similarities in data) except for the problem of not knowing the tree to decompress, which is usually not serialized to avoid the additional overhead. 
+
+To remedy this, adapted Huffman encoding is an algorithm in order to reconstruct trees by changing encoding to make frequent letters cheaper, so that trees will only depend on frequencies.
+
+Performance of such technique is quite bad, and might not balance the time saved from I/O. A reasonable compromise is byte-wise encoding through VLE, a bit worse in terms of size but faster in the long run and able to handle null values.
+
+Compressed data, however, has variable length, and sometimes depend on precedent compression. Lookup tables help precomputing and locating quickly.
+
+Dictionary encoding is a particular method used for strings, since data tends to be redundant: it stores strings in a dictionary, and only the ID is contained in the tuple, greatly reducing the total size. 
+
+\subsection{Long records}
+Long records consist in a long-term solution in case the previously mentioned methods cannot be used: the root of the idea are pages which do not fit into a single page (BLOB, for instance).
+
+These could be stored with a pointer to the attribute to a whole page, or eventually a long chain of pointers, but this implementation is problematic since it implies reading a potentially unbounded amount of pages (troublesome for buffering or locking). Furthermore, updates involve multiple allocations or releases in the system. 
+
+Instead, tuples are stored separately from BLOB objects, and not parsed until a query is actually performed; sometimes IDs are assigned to BLOBs, hiding their complexity.
+
+In most systems, it is not easily possible to perform many operations on such data types, for instance looking at the content, and costs are generally high even though processing is simple.
+
+When objects are in the order of MBs, data is again mapped to pages, storing information in a B-tree like fashion. Each node contains a part of the BLOB and a key representing a range (offset) for searching. Relative offsets allow logarithmic worst-case runtime when updating, the only downside is the overly complicated interface.
+
+Using an extent list is simpler, having a chain of real tuples pointing to BLOB tuples with unlikely worst-case scenarios. BLOBS can be manipulated as a whole piece, but are harder to update in pieces. 
+
+Postgres employs TOAST, a mechanism to shorten long tuples.
+
+Other approaches encode short BLOBs in the TID, and uses the full procedure only for actually large objects. The ones smaller than the page size are stored in records.
+
+\subsection{Index structures}
+Index structures come in handy when a small part of all the available tuples need to be fetched (either point or range queries), or when making sure primary keys exist. 
+
+
+\subsection{B-trees}
+B-trees are the most popular data structure used for external storage: every tree has a degree $k$ and each nodes has $k \leq n \leq 2k$ entries. All leaves must have the same depth, which can be bounded with the logarithm of the size (usually 3 or 4).
+
+Given they are particularly easier to implement and generally faster than red-black trees, B-trees are widely used in their variant of B+-trees, which are even simpler and store TIDs only in leaves. Inner nodes contain separators which may or may not occur in the data.
+
+Each node contains:
+\begin{itemize}
+	\item LSN for recovery;
+	\item Upper node or leaf node marker, the latter being a value which cannot appear in the former;
+	\item Number of entries;
+	\item Key/TID/child;
+	\item Next leaf node (only for leaves, a flag).
+\end{itemize}
+
+% todo insert lookup delete
+
+\subsection{B+-trees}
+\subsubsection{Insertion}
+Insertion is performed in the following way:
+\begin{itemize}
+	\item The leaf page is looked up;
+	\item If there is available space, the entry is inserted;
+\end{itemize}
+
+Bulk insertions can be optimized, since the tree needs to be rebuilt several times and there is a lot of random I/O. Each database system implements it in its own way (Postgres for instance loads a whole file through a COPY instruction), trying to improve locality.
+
+Sorting is an option since the order is not random, but it triggers the worst-case scenario of space consumption: all the pages will be half-full, since the rightmost one is split.
+
+Since a database is usually aware of bulk loading, this can be optimized further:
+\begin{itemize}
+	\item Data is sorted;
+	\item Data is spooled into leaf pages, filling them completely and storing the largest value in each;
+	\item Separators are spooled into inner pages, again remembering inner separators;
+	\item This is repeated until one page is left (the root).
+\end{itemize}
+This method provides a compact B+-tree, performing only sequential I/O with all full pages except for the rightmost and improving locality on disk.
+
+Inserting in an existing tree requires a level of merging to be employed in the above procedure, beginning with merging all data and then starting a new chunk once a page would contain only entries from the original tree and then merging separators. 
+
+Under-full pages can therefore be accepted to avoid moving all data already contained in old pages but obviously not guaranteeing adjacent pages anymore. 
+
+\subsubsection{Deletion}
+Deletion is the hardest operation to perform in B+-trees, since it may violate the strong criterion of having at least half the pages half full. 
+
+In case the removal of an entry violates this property, logarithmic cost is not guaranteed anymore, therefore the tree needs to be rebalanced: this happens through merging pages with their neighboring ones, updating separators.
+
+Finding neighbors, however, can be a difficult task: the succeeding value can be located far away in the structure, hence a simpler solution is to just choose another child of the parent, achieving constant time.
+
+Many systems do not implement a proper deletion logic, since it is so complicated, and just accept pages under-full, eventually deleting them completely. In the long run, however, if the value of newly-inserted entries is much bigger than the deleted ones, free space may be never used.
+
+\subsubsection{Range scans}
+Range scan is the operation reading all entries within a range. This is efficient thanks to pointers to next element, therefore only the first lookup needs to be performed.
+
+This works particularly well when leaf nodes are stored consequently on disk, or cached (clusters).
+
+\subsection{Compound keys}
+Compound keys are compared lexicographically according to the following rule:
+$$(a_1, a_2) < (b_1, b_2) \leftrightarrow (a_1 < b_1) \lor (a_1 = b_1 \land a_2 < b_2)$$
+Other than this, they are quite similar to atomic keys. Search can be performed by imposing a prefix of the compound and using anything else as a range, however the other way around can be difficult to implement.
+
+\subsection{Non-unique values}
+Users may decide to apply an index on columns containing many duplicates, which need to be retrieved for updates and deletions. 
+
+The solution in this case is to only index unique values, appending a TID to the non-key attributes working as a tie-breaker. Space complexity grows sightly, but logarithmic access is still guaranteed. 
+
+\subsection{Concurrent access}
+Concurrent access cannot be handled through simple page locking or latching, since this method only works for leaf nodes; inner pages locking might cause missed values.
+
+The classical technique is lock coupling, working in the following way:
+\begin{itemize}
+	\item A thread locks both the page and its parent;
+	\item The parent is released as a new lock is acquired on the child, and so on;
+\end{itemize}
+This prevents conflicts and deadlocks, as latches are ordered and pages can only be split when the parent is latched.
+
+Concurrent insertions might cause the split to propagate up, until the root, making lock coupling not an option anymore since the parent may need to be locked, causing deadlocks.
+
+Another solution is safe inner pages: while going down, a check if the inner page has enough space is performed, and if not the page is split. This method ensures going up of never more than a step.
+
+An alternative to this is just restarting the process, releasing all latches only if the inner node must be split, and keeping all latches up to the root in the new execution. It is not ideal since it involves less concurrency, yet happens extremely rarely.
+
+% todo blink
+
+\subsection{Partitioned B-trees}
+Bulk insertions in trees work well if they are not too frequent, but usually require taking the index offline and impacting optimization.
+
+Partitioned B-trees are created by adding an artificial column (partitioning key) causing all new values to be larger than the existing ones. Partitions are largely independent and can be efficiently merged, but lookups need to access all partitions and deletions are complicated to implement.
+
+\subsection{Variable length records}
+In reality, entries can have variable length, making it harder to check whether a page is half full. Having keys of different length (or alternating) can produce multiple tree structures and depths, depending on the separator. 
+
+This emphasizes on the importance of choosing the right separator, a non-trivial issue to achieve logarithmic height. The main idea behind algorithms is to pick the smallest value within 20\% around the median whenever a page overflows.
+
+% todo prexix btree
+
+\subsection{Hashing}
+Hash tables are a data structure used for single, infrequent lookups, providing amortized expected constant runtime through hashing keys either with chaining or open addressing.
+
+To map keys to their hashed values, a prime module function is used. Calculations can be sped up with the following methods:
+\begin{itemize}
+	\item Making the modulo operation cheap by precomputing some magic numbers to then perform a sequence of multiplications and shifting;
+	\item Making sure that $N$ is a power of two;
+	\item Converting 32 bits to 64, multiplying by the hash table size and shifting again.
+\end{itemize}
+DBMS benefit from this implementing hash tables as indexes, but downsides are many, such as random I/O and expensive rehashing. In practice, hash tables are mainly used for primary keys, since the number of collisions should be less due to uniqueness of values. Duplicate values can be handled by reindexing them, or just with a tree.
+
+In real life it is hard to predict the table size beforehand, and rehashings are to be avoided, due to their expensiveness: extendible hashing is a technique in which pointers lead to buckets (pages), even the same one, obtaining variable depth.
+
+When a bucket overflows, it is split, increasing the depth and adding a bit. Pointers must be un-shared and items are redistributed. Exponential growth, however, should stop at some point, falling back to chaining.
+
+
+
+

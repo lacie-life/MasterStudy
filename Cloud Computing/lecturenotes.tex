@@ -1,0 +1,46 @@
+% Dokumentenart. Ersetze 12pt, falls die Schriftgröße anzupassen ist.
+\documentclass[12pt]{scrartcl}
+
+% Einbinden der Pakete, des Headers und der Formatierung.
+\input{styles/Packages.tex}
+\input{styles/FormatAndHeader.tex}
+\graphicspath{{bilder/}}
+
+\usepackage{eurosym}
+\usepackage{mathtools}
+
+% Counter für das Blatt und die Aufgabennummer.
+\setcounter{sheetnr}{0} % Nummer des Übungsblattes
+\setcounter{exnum}{1} % Nummer der Aufgabe
+
+\newcommand*\circled[1]{\tikz[baseline=(char.base)]{
+		\node[shape=circle,draw,inner sep=2pt] (char) {#1};}}     % number in circles
+% Beginn des eigentlichen Dokuments
+\begin{document}
+	\pagenumbering{roman}
+	\input{styles/title.tex}
+	\newpage
+	\setcounter{tocdepth}{2}
+	
+	\tableofcontents
+	\newpage
+	\flushleft
+	
+	\pagenumbering{arabic}
+	\input{lectures/introduction.tex}
+	\input{lectures/basetech.tex}
+	\input{lectures/virtualization.tex}
+	\input{lectures/iaas.tex}
+	\input{lectures/iaas_openstack.tex}
+	\input{lectures/paas.tex}
+	\input{lectures/mono_micro.tex}
+	\input{lectures/kubernetes.tex}
+	\input{lectures/faas.tex}
+	\input{lectures/monitoring.tex}
+	\input{lectures/autoscaling.tex}
+	\input{lectures/iot.tex}
+	
+	
+	% TODOS: REST API, container, orchestration, virtualization, docker VS. VM virtualization, hypervisor, service models, HPC & Cloud computing, VM migration, AWS availability, QoS, Kubernetes -- pods, minions, open source clouds, dockerfile, image file creation, Xeon Phi novel aspects, machine image, instance type, deployment models in microservice, lifecycle of VM, cost model serverless platform, infinite scaling, autoscaling approaches, step-scaling, normal read VS. strong consistent read, docker tag command
+	
+\end{document}
